@@ -13,6 +13,7 @@ dependencies = [
     "torch",
     "torchvision",
     "torchaudio",
+    "einops>=0.8.2",
 ]
 
 [tool.uv.sources]
