@@ -79,6 +79,43 @@ class MultiHeadAttention(nn.Module):
         out = self.out_proj(attn)
         return out
 
+class AdaLNCondBlock(nn.Module):
+    """AdaLNCondBlock"""
+    def __init__(self, dim=256, n_heads=4, dropout=0.1):
+        super().__init__()
+        self.dim = dim
+        self.n_heads = n_heads
+        self.dropout = dropout
+        if self.dim % self.n_heads != 0:
+            raise ValueError(f"dim:{self.dim} must be divisible by n_heads:{self.n_heads}")
+        self.norm1 = nn.LayerNorm(self.dim)
+        self.attn = MultiHeadAttention(dim=self.dim, n_heads=self.n_heads, dropout=self.dropout, use_flash_attn=True, causal=True)
+        self.norm2 = nn.LayerNorm(self.dim)
+        self.mlp = MLP(dim=self.dim, inner_dim=self.dim*4, dropout=self.dropout)
+        self.adaLN = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(self.dim, self.dim*6),
+        )
+        nn.init.constant_(self.adaLN[-1].weight, 0) # adaLN-zero
+        nn.init.constant_(self.adaLN[-1].bias, 0) # adaLN-zero
+
+    @staticmethod
+    def ada_shift_scale(x, shift, scale):
+        return x * (1 + scale) + shift
+    
+    def forward(self, x, c):
+        '''
+        x: inp, c: condition
+        Residual attn block with adaLN conditioning; here action_embeddings are used as cond
+        == Ref:
+        adaLN: <https://arxiv.org/pdf/1707.06065>
+        adaLN-zero: <https://arxiv.org/pdf/2212.09748>
+        '''
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN(c).chunk(6, dim=-1)
+        x = x + gate_msa* self.attn(self.ada_shift_scale(x=self.norm1(x), shift=shift_msa, scale=scale_msa))
+        x = x + gate_mlp* self.mlp(self.ada_shift_scale(x=self.norm2(x), shift=shift_mlp, scale=scale_mlp))
+        return x
+
 class ResidualBlock(nn.Module):
     """standard AttnBlock with res skip connections"""
     def __init__(self, dim=256, n_heads=4, dropout=0.1):
@@ -132,30 +169,52 @@ class ViTEncoder(nn.Module):
         emb = self.blocks(emb)
         return emb
 
+class DynamicsPredictor(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.dim = config["dim"]
+        self.n_blocks = config["n_blocks"]
+        self.dropout = config["dropout"]
+        self.n_heads = config["n_heads"]
+        self.n_pred_frames = config["n_pred_frames"]
+        self.temporal_pos_emb = nn.Parameter(torch.randn(1, self.n_pred_frames, self.dim )*0.02)
+        self.norm = nn.LayerNorm(self.dim)
+        self.blocks = nn.ModuleList([
+            AdaLNCondBlock(dim=self.dim, n_heads=self.n_heads, dropout=self.dropout)
+            for _ in range(self.n_blocks)
+        ])
+        self.out_proj = MLP(self.dim, self.dim*4, dropout=self.dropout)
+
+    def forward(self, state_emb, act_emb):
+        """
+        state_emb  (b t dim)
+        act_emb    (b t dim); passed as condition
+        """
+        _, t, _ = state_emb.shape
+        state_emb = state_emb + self.temporal_pos_emb[:,:t]
+        state_emb = nn.functional.dropout(state_emb, p=self.dropout if self.training else 0)
+        for block in self.blocks:
+            state_emb = block(state_emb, act_emb)
+        pred_state_emb = self.out_proj(self.norm(state_emb))
+        return pred_state_emb
+        
 class TinyWorldModel(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.dim = config["dim"]
         self.encoder = ViTEncoder(config["ViTEncoder"])
-    
-    def forward(self, frames, actions):
-        pass
+        self.predictor = DynamicsPredictor(config["DynamicsPredictor"])
+        self.action_emb = nn.Embedding(num_embeddings=config["n_actions"], embedding_dim=config["dim"])
+        self.state_proj = MLP(self.dim, self.dim*4, dropout=0.1)
 
-if __name__ == "__main__":
-    config = {
-        "ViTEncoder": {
-            "height": 240,
-            "width": 256,
-            "dim": 384,
-            "patch_size": 16,
-            "dropout": 0.1,
-            "n_heads": 6,
-            "n_blocks": 8,
-        }
-    }
+    def encode(self, frames, actions):
+        b, t, _, _, _ = frames.shape
+        frames = rearrange(frames, "b t c h w -> (b t) c h w")
+        frames_emb = self.encoder(frames)
+        state_emb = rearrange(frames_emb[:,0], "(b t) dim -> b t dim", b=b, t=t) # [CLS] token
+        state_emb = self.state_proj(state_emb)
+        act_emb = self.action_emb(actions)
+        return state_emb, act_emb
 
-    model = ViTEncoder(config=config["ViTEncoder"])
-    params = sum(p.numel() for p in model.parameters())
-    print(f"Number of parameters: {params:,}")
-    a = torch.randn(8, 3, 240, 256)
-    ret = model(a)
-    print(ret.shape)
+    def predict(self, state_emb, action_emb):
+        return self.predictor(state_emb, action_emb)
