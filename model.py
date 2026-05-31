@@ -44,7 +44,7 @@ class MultiHeadAttention(nn.Module):
         qk = q @ k.transpose(-2, -1) # (b, n_heads, seq_len, head_dim) @ (b, n_heads, head_dim, seq_len) -> (b, n_heads, seq_len, seq_len)
         qk = qk / self.head_dim ** (1/2)
 
-        # mask out future tokens
+        # mask out future tokens, only attend to past and curr tokens; no cheating :p
         if causal:
             l = qk.shape[-1]
             mask = torch.triu(torch.full((l, l), float("-inf"), device=qk.device, dtype=qk.dtype), diagonal=1)
@@ -78,7 +78,6 @@ class MultiHeadAttention(nn.Module):
         attn = attn.view(b, seq_len, dim)
         out = self.out_proj(attn)
         return out
-
 
 class ResidualBlock(nn.Module):
     """standard AttnBlock with res skip connections"""
@@ -122,7 +121,7 @@ class ViTEncoder(nn.Module):
     def forward(self, frames):
         '''
         inputs : frames (bt, 3, h, w)
-        returns: embeds (bt, H*W+[CLS], dim)
+        returns: embeds (bt, [CLS]+H*W, dim)
         H: h//patch_size ; W: w//patch_size
         '''
         emb = self.patch_emb(frames)  # (bt, dim, H, W)
@@ -140,7 +139,6 @@ class TinyWorldModel(nn.Module):
     
     def forward(self, frames, actions):
         pass
-
 
 if __name__ == "__main__":
     config = {
