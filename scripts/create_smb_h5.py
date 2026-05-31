@@ -85,6 +85,7 @@ def main():
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--compression", type=str, default="lzf", choices=["lzf", "gzip", "none"])
+    parser.add_argument("--chunk-frames", type=int, default=16, help="Number of temporal frames per H5 frame chunk")
     parser.add_argument("--out", default=None)
 
     args = parser.parse_args()
@@ -133,12 +134,15 @@ def main():
 
     compression = None if args.compression == "none" else args.compression
     string_dtype = h5py.string_dtype(encoding="utf-8") # h5py doesn't support str unicode??
+    frame_chunk_frames = min(args.chunk_frames, total_kept_frames)
+    action_chunk_frames = min(args.chunk_frames*1024, total_kept_frames)
 
     with h5py.File(args.out, "w") as h5:
         frames_ds = h5.create_dataset(
             "frames",
             shape=(total_kept_frames, args.height, args.width, 3),
             dtype=np.uint8,
+            chunks=(frame_chunk_frames, args.height, args.width, 3),
             compression=compression,
         )
 
@@ -146,6 +150,7 @@ def main():
             "action",
             shape=(total_kept_frames,),
             dtype=np.uint8,
+            chunks=(action_chunk_frames,),
             compression=compression,
         )
 
@@ -153,6 +158,7 @@ def main():
             "old_action",
             shape=(total_kept_frames,),
             dtype=np.uint8,
+            chunks=(action_chunk_frames,),
             compression=compression,
         )
 
@@ -160,6 +166,7 @@ def main():
             "frame_ids",
             shape=(total_kept_frames,),
             dtype=np.int64,
+            chunks=(action_chunk_frames,),
             compression=compression,
         )
 
@@ -169,6 +176,7 @@ def main():
 
         curr_pos = 0
 
+        print(f"frame chunks: ({frame_chunk_frames},{args.height},{args.width},3)")
         print("==== Writing *.h5 file =====")
         for episode_dir, _frames, kept in tqdm(episodes):
             start_pos = curr_pos
@@ -213,6 +221,7 @@ def main():
         h5.attrs["stride"] = stride
         h5.attrs["width"] = args.width
         h5.attrs["height"] = args.height
+        h5.attrs["chunk_frames"] = args.chunk_frames
         h5.attrs["num_action_classes"] = 16
         h5.attrs["invalid_action"] = INVALID_ACTION
 
