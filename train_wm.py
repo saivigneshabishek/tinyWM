@@ -172,8 +172,10 @@ def main():
             if wandb_run is not None:
                 val_log = {
                     "val/loss": total_val_loss/len(val_loader),
+                    "epoch": epoch,
+                    "step": global_step,
                 }
-                wandb_run.log(val_log, step=epoch)
+                wandb_run.log(val_log, step=global_step)
 
             if total_val_loss < best_val_loss:
                 best_val_loss = total_val_loss
