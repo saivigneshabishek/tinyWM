@@ -1,0 +1,61 @@
+seed: 404
+device: cuda
+bf16: true
+
+dataset:
+  path: data/smb_30fps_256x240_chunk16.h5
+  height: 240
+  width: 256
+  window_len: 16
+  stride: 1
+  n_val_episodes: 25
+  seed: ${seed}
+
+dataloader:
+  batch_size: 64
+  num_workers: 8
+
+TinyWorldModel:
+  dim: 384
+  n_actions: 16 # number of actions
+  dropout: 0.1
+
+  ViTEncoder:
+    height: ${dataset.height}
+    width: ${dataset.width}
+    dim: ${TinyWorldModel.dim}
+    patch_size: 16
+    dropout: ${TinyWorldModel.dropout}
+    n_heads: 6
+    n_blocks: 6
+
+  DynamicsPredictor:
+    dim: ${TinyWorldModel.dim}
+    dropout: ${TinyWorldModel.dropout}
+    n_heads: 6
+    n_blocks: 8
+    n_pred_frames: 15
+
+loss:
+  sigreg:
+    knots: 17
+    num_proj: 1024
+    lambd: 0.09
+
+optimizer:
+  lr: 5e-5
+  weight_decay: 1e-3
+
+train:
+  epochs: 100
+  val_interval: 2
+
+checkpoint:
+  out_dir: checkpoints
+
+wandb:
+  enabled: true
+  project: tinyWM
+  entity: 
+  run_name: baseRun
+  dir: runs/wandb
