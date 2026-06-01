@@ -1,5 +1,7 @@
 from argparse import ArgumentParser
-from collections import Counter, defaultdict
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import re
 
@@ -77,6 +79,14 @@ def load_frame(path, width, height):
     return img.astype(np.uint8, copy=False)
 
 
+def load_kept_frame(job):
+    frame, width, height = job
+    old_cls = int(frame["raw_action"])
+    cls = RAW_TO_CLASS.get(old_cls, OTHER_CLASS)
+    image = load_frame(frame["path"], width, height)
+    return image, cls, old_cls, int(frame["frame"])
+
+
 def main():
     parser = ArgumentParser()
     parser.add_argument("--root", default="data/data-smb", help="Path to SMB dataset")
@@ -86,11 +96,17 @@ def main():
     parser.add_argument("--height", type=int, default=240)
     parser.add_argument("--compression", type=str, default="lzf", choices=["lzf", "gzip", "none"])
     parser.add_argument("--chunk-frames", type=int, default=16, help="Number of temporal frames per H5 frame chunk")
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--out", default=None)
 
     args = parser.parse_args()
 
     args.root = Path(args.root)
+    if args.num_workers == 0:
+        args.num_workers = min(16, os.cpu_count() or 1)
+    if args.chunk_frames < 1:
+        raise ValueError("--chunk-frames must be >= 1")
+    cv2.setNumThreads(1)
 
     # reduce number of samples
     assert args.source_fps % args.fps == 0
@@ -178,39 +194,46 @@ def main():
 
         print(f"frame chunks: ({frame_chunk_frames},{args.height},{args.width},3)")
         print("==== Writing *.h5 file =====")
-        for episode_dir, _frames, kept in tqdm(episodes):
-            start_pos = curr_pos
-            episode_id = int(_frames[0]["episode"])
-            world_level = str(_frames[0]["world_level"])
-            n = len(kept)
-            end_pos = start_pos + n
+        executor = ThreadPoolExecutor(max_workers=args.num_workers) if args.num_workers > 1 else None
+        try:
+            for episode_dir, _frames, kept in tqdm(episodes):
+                start_pos = curr_pos
+                episode_id = int(_frames[0]["episode"])
+                world_level = str(_frames[0]["world_level"])
+                n = len(kept)
+                end_pos = start_pos + n
 
-            episode_frames = np.empty((n,args.height,args.width,3), dtype=np.uint8)
-            episode_actions = np.full((n), INVALID_ACTION, dtype=np.uint8)
-            episode_old_actions = np.full((n), INVALID_ACTION, dtype=np.uint8)
-            frame_ids = np.full((n), INVALID_ACTION, dtype=np.int64)
+                episode_frames = np.empty((n,args.height,args.width,3), dtype=np.uint8)
+                episode_actions = np.full((n), INVALID_ACTION, dtype=np.uint8)
+                episode_old_actions = np.full((n), INVALID_ACTION, dtype=np.uint8)
+                frame_ids = np.full((n), INVALID_ACTION, dtype=np.int64)
 
-            for idx, keep_ in enumerate(kept):
-                frame = _frames[keep_]
-                old_cls = int(frame["raw_action"])
-                cls = RAW_TO_CLASS.get(old_cls, OTHER_CLASS)
+                jobs = ((_frames[keep_], args.width, args.height) for keep_ in kept)
+                if executor is None:
+                    records = map(load_kept_frame, jobs)
+                else:
+                    records = executor.map(load_kept_frame, jobs)
 
-                episode_frames[idx] = load_frame(frame["path"], args.width, args.height)
-                episode_old_actions[idx] = old_cls
-                episode_actions[idx] = cls
-                frame_ids[idx] = int(frame["frame"])
+                for idx, (image, cls, old_cls, frame_id) in enumerate(records):
+                    episode_frames[idx] = image
+                    episode_old_actions[idx] = old_cls
+                    episode_actions[idx] = cls
+                    frame_ids[idx] = frame_id
 
-            # store the episode data as blocks
-            frames_ds[start_pos:end_pos] = episode_frames
-            actions_ds[start_pos:end_pos] = episode_actions
-            old_actions_ds[start_pos:end_pos] = episode_old_actions
-            frame_ids_ds[start_pos:end_pos] = frame_ids
+                # store the episode data as blocks
+                frames_ds[start_pos:end_pos] = episode_frames
+                actions_ds[start_pos:end_pos] = episode_actions
+                old_actions_ds[start_pos:end_pos] = episode_old_actions
+                frame_ids_ds[start_pos:end_pos] = frame_ids
 
-            episode_offsets.append(end_pos)
-            episode_numbers.append(episode_id)
-            episode_world_levels.append(world_level)
+                episode_offsets.append(end_pos)
+                episode_numbers.append(episode_id)
+                episode_world_levels.append(world_level)
 
-            curr_pos = end_pos
+                curr_pos = end_pos
+        finally:
+            if executor is not None:
+                executor.shutdown()
 
         h5.create_dataset("episode_offsets", data=np.asarray(episode_offsets, dtype=np.int64))
         h5.create_dataset("episode_world_levels", data=episode_world_levels, dtype=string_dtype)
