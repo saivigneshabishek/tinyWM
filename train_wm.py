@@ -42,6 +42,12 @@ def load_config(path):
     cfg = OmegaConf.load(path)
     return OmegaConf.to_container(cfg, resolve=True)
 
+def prepare_frames(frames, device):
+    frames = frames.to(device, non_blocking=True)
+    if frames.dtype == torch.uint8:
+        return frames.float().div_(255.0) # ops on device
+    return frames.float()
+
 def get_dataloader(cfg, train=True):
     data_cfg = cfg["dataset"]
     loader_cfg = cfg["dataloader"]
@@ -125,8 +131,8 @@ def main():
         device = cfg["device"]
         for frames, actions in tqdm(train_loader):
             optimizer.zero_grad()
-            frames = frames.to(device)
-            actions = actions.to(device)
+            frames = prepare_frames(frames, device)
+            actions = actions.to(device, non_blocking=True)
             use_amp = (device == "cuda" and cfg["bf16"])
             with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_amp):
                 state_emb, act_emb = model.encode(frames, actions)
@@ -157,8 +163,8 @@ def main():
             total_val_loss = 0
             with torch.no_grad():
                 for frames, actions in tqdm(val_loader):
-                    frames = frames.to(device)
-                    actions = actions.to(device)
+                    frames = prepare_frames(frames, device)
+                    actions = actions.to(device, non_blocking=True)
                     use_amp = (device == "cuda" and cfg["bf16"])
                     with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_amp):
                         state_emb, act_emb = model.encode(frames, actions)

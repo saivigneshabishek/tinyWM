@@ -37,7 +37,7 @@ class TinyWMDataset(Dataset):
             self._h5 = h5py.File(self.h5_path, 'r')
         start, end = self.sample_indices[idx]
         frames = self._h5["frames"][start:end]
-        frames = torch.from_numpy(frames).permute(0,3,1,2).float() / 255.0 # (T, 3, H, W)
+        frames = torch.from_numpy(frames).permute(0,3,1,2) # (T, 3, H, W) uint8
         actions = torch.from_numpy(self._h5["action"][start:end]).long() # (T,)
         return frames, actions
     
