@@ -36,7 +36,7 @@ class SIGReg(torch.nn.Module):
         x_t = (proj @ A).unsqueeze(-1) * self.t
         err = (x_t.cos().mean(-3) - self.phi).square() + x_t.sin().mean(-3).square()
         statistic = (err @ self.weights) * proj.size(-2)
-        return self.lambd*(statistic.mean()) # average over projections and time
+        return statistic.mean() # average over projections and time
 
 def load_config(path):
     cfg = OmegaConf.load(path)
@@ -142,7 +142,8 @@ def main():
                 pred_state_emb = model.predict(input_state_emb, input_act_emb)
                 
                 mse_loss = MSE(pred_state_emb, target_state_emb)
-                loss = mse_loss + SigReg(state_emb.transpose(0,1)) # lambda is already applied!
+                sigreg = SigReg(state_emb.transpose(0,1))
+                loss = mse_loss + SigReg.lambd * sigreg
 
             loss.backward()
             optimizer.step()
@@ -151,6 +152,8 @@ def main():
             if global_step % 100 == 0:
                 log = {
                     "train/loss": float(loss.detach().cpu()),
+                    "train/mse_loss": float(mse_loss.detach().cpu()),
+                    "train/sigreg": float(sigreg.detach().cpu()),
                     "epoch": epoch,
                     "step": global_step,
                     "lr": optimizer.param_groups[0]["lr"],
