@@ -52,7 +52,6 @@ def get_dataloader(cfg, train=True):
     data_cfg = cfg["dataset"]
     loader_cfg = cfg["dataloader"]
     device = cfg["device"]
-
     dataset = TinyWMDataset(
         path=data_cfg["path"],
         window_len=data_cfg["window_len"],
@@ -61,15 +60,17 @@ def get_dataloader(cfg, train=True):
         n_val_episodes=data_cfg["n_val_episodes"],
         seed=cfg["seed"],
     )
-    return DataLoader(
-        dataset,
-        batch_size=loader_cfg["batch_size"],
-        shuffle=train,
-        num_workers=loader_cfg["num_workers"],
-        pin_memory=(device == "cuda"),
-        drop_last=train,
-    )
-
+    loader_kwargs = {
+        "batch_size": loader_cfg["batch_size"],
+        "shuffle": train,
+        "num_workers": loader_cfg["num_workers"],
+        "pin_memory": (device == "cuda"),
+        "drop_last": train,
+    }
+    if loader_cfg["num_workers"] > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = loader_cfg.get("prefetch_factor", 4)
+    return DataLoader(dataset, **loader_kwargs)
 
 def save_checkpoint(path, model, optimizer, cfg, epoch, global_step, val_loss):
     path.parent.mkdir(parents=True, exist_ok=True)
