@@ -52,6 +52,7 @@ train:
 
 checkpoint:
   out_dir: checkpoints
+  resume_from:
 
 wandb:
   enabled: true
