@@ -6,7 +6,7 @@ dataset:
   path: data/smb_30fps_256x240_chunk16.h5
   height: 240
   width: 256
-  window_len: 16
+  window_len: 6
   stride: 1
   n_val_episodes: 25
   seed: ${seed}
@@ -34,13 +34,16 @@ TinyWorldModel:
     dropout: ${TinyWorldModel.dropout}
     n_heads: 6
     n_blocks: 8
-    n_pred_frames: 15
+    n_pred_frames: 5
 
 loss:
   sigreg:
     knots: 17
     num_proj: 1024
     lambd: 0.09
+  rollout:
+    use: true
+    weight: 0.2
 
 optimizer:
   lr: 5e-5

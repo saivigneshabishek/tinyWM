@@ -197,7 +197,16 @@ class DynamicsPredictor(nn.Module):
             state_emb = block(state_emb, act_emb)
         pred_state_emb = self.out_proj(self.norm(state_emb))
         return pred_state_emb
-        
+
+    def rollout_step(self, idx, state_emb, act_emb):
+        # placeholder. currently it does the same as fwd function, but it will likely change
+        state_emb = state_emb + self.temporal_pos_emb[:,:idx]
+        state_emb = nn.functional.dropout(state_emb, p=self.dropout if self.training else 0)
+        for block in self.blocks:
+            state_emb = block(state_emb, act_emb)
+        pred_state_emb = self.out_proj(self.norm(state_emb))
+        return pred_state_emb
+    
 class TinyWorldModel(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -224,3 +233,6 @@ class TinyWorldModel(nn.Module):
 
     def predict(self, state_emb, action_emb):
         return self.predictor(state_emb, action_emb)
+
+    def rollout_step(self, idx, state_emb, action_emb):
+        return self.predictor.rollout_step(idx, state_emb, action_emb)

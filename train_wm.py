@@ -147,6 +147,7 @@ def main():
     SigReg = SIGReg(knots=cfg["loss"]["sigreg"]["knots"],
                     num_proj=cfg["loss"]["sigreg"]["num_proj"],
                     lambd=cfg["loss"]["sigreg"]["lambd"]).to(device=cfg["device"])
+    use_rollout = cfg["loss"]["rollout"]["use"]
     
     print(f"Using config: {args.config}")
 
@@ -198,11 +199,28 @@ def main():
                 input_act_emb = act_emb[:,:-1]
                 target_state_emb = state_emb[:,1:]
                 pred_state_emb = model.predict(input_state_emb, input_act_emb)
-                
+
                 mse_loss = MSE(pred_state_emb, target_state_emb)
                 sigreg = SigReg(state_emb.transpose(0,1))
                 loss = mse_loss + SigReg.lambd * sigreg
-
+                # k step rollout
+                if use_rollout:
+                    rollout_weight = cfg["loss"]["rollout"]["weight"]
+                    k = input_state_emb.shape[1]
+                    history = [input_state_emb[:, 0:1]]
+                    rollout_preds = []
+                    for idx in range(1, k + 1):
+                        rollout_state = torch.cat(history, dim=1)
+                        pred_seq = model.rollout_step(idx, rollout_state, input_act_emb[:, :idx])
+                        pred_next = pred_seq[:, -1:]
+                        history.append(pred_next)
+                        rollout_preds.append(pred_next)
+                    rollout_preds = torch.cat(rollout_preds, dim=1)
+                    step_weights = torch.arange(1,k + 1,device=rollout_preds.device,dtype=torch.float32)
+                    step_weights = step_weights / step_weights.sum()
+                    per_step_mse = (rollout_preds.float() - target_state_emb.float()).pow(2).mean(dim=(0, 2))
+                    rollout_loss = rollout_weight*(per_step_mse*step_weights).sum()
+                    loss = loss + rollout_loss
             loss.backward()
             optimizer.step()
             global_step += 1
@@ -212,6 +230,7 @@ def main():
                     "train/loss": float(loss.detach().cpu()),
                     "train/mse_loss": float(mse_loss.detach().cpu()),
                     "train/sigreg": float(sigreg.detach().cpu()),
+                    "train/rollout": float(rollout_loss.detach().cpu()) if use_rollout else 0,
                     "epoch": epoch,
                     "step": global_step,
                     "lr": optimizer.param_groups[0]["lr"],
@@ -222,6 +241,7 @@ def main():
         if (epoch % cfg["train"]["val_interval"] == 0) or epoch==cfg["train"]["epochs"]:
             model.eval()
             total_val_loss = 0
+            total_val_rollout_loss = 0
             with torch.no_grad():
                 for frames, actions in tqdm(val_loader):
                     frames = prepare_frames(frames, device)
@@ -236,9 +256,29 @@ def main():
                         loss = MSE(pred_state_emb, target_state_emb)
                         total_val_loss += float(loss.detach().cpu())
 
+                        # k step rollout
+                        if use_rollout:
+                            rollout_weight = cfg["loss"]["rollout"]["weight"]
+                            k = input_state_emb.shape[1]
+                            history = [input_state_emb[:, 0:1]]
+                            rollout_preds = []
+                            for idx in range(1, k + 1):
+                                rollout_state = torch.cat(history, dim=1)
+                                pred_seq = model.rollout_step(idx, rollout_state, input_act_emb[:, :idx])
+                                pred_next = pred_seq[:, -1:]
+                                history.append(pred_next)
+                                rollout_preds.append(pred_next)
+                            rollout_preds = torch.cat(rollout_preds, dim=1)
+                            step_weights = torch.arange(1,k + 1,device=rollout_preds.device,dtype=torch.float32)
+                            step_weights = step_weights / step_weights.sum()
+                            per_step_mse = (rollout_preds.float() - target_state_emb.float()).pow(2).mean(dim=(0, 2))
+                            rollout_loss = rollout_weight*(per_step_mse*step_weights).sum()
+                            total_val_rollout_loss += float(rollout_loss.detach().cpu())
+
             if wandb_run is not None:
                 val_log = {
                     "val/loss": total_val_loss/len(val_loader),
+                    "val/rollout_loss": total_val_rollout_loss/len(val_loader),
                     "epoch": epoch,
                     "step": global_step,
                 }
