@@ -204,7 +204,13 @@ class TinyWorldModel(nn.Module):
         self.dim = config["dim"]
         self.encoder = ViTEncoder(config["ViTEncoder"])
         self.predictor = DynamicsPredictor(config["DynamicsPredictor"])
-        self.action_emb = nn.Embedding(num_embeddings=config["n_actions"], embedding_dim=config["dim"])
+        self.action_emb = nn.Sequential(
+                            nn.Embedding(num_embeddings=config["n_actions"], embedding_dim=self.dim//4),
+                            nn.SiLU(),
+                            nn.Linear(self.dim//4, self.dim//2),
+                            nn.SiLU(),
+                            nn.Linear(self.dim//2, self.dim),
+                        )
         self.state_proj = MLP(self.dim, self.dim*4, dropout=0.1)
 
     def encode(self, frames, actions):
