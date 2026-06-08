@@ -43,7 +43,7 @@ TinyWMDecoder:
   patch_size: 16
   dropout: 0.1
   n_heads: 6
-  n_blocks: 3
+  n_blocks: 6
   up_channels: 128
 
 loss:

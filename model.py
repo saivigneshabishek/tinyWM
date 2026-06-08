@@ -368,9 +368,6 @@ class TinyWMDecoder(nn.Module):
         self.dropout = config["dropout"]
         self.up_channels = config["up_channels"]
 
-        self.queries = nn.Parameter(torch.randn(1, self.n_patches, self.dim) * 0.02)
-        self.query_pos = nn.Parameter(torch.randn(1, self.n_patches, self.dim) * 0.02)
-
         self.latent_proj = nn.Sequential(
                     nn.Linear(self.dim, self.dim),
                     nn.LayerNorm(self.dim),
@@ -389,7 +386,6 @@ class TinyWMDecoder(nn.Module):
         
         self.blocks = nn.ModuleList([
             nn.ModuleDict({
-                "res_self_attn": ResidualBlock(dim=self.dim, n_heads=self.n_heads, dropout=self.dropout),
                 "adaln_cross_attn": AdaLNCrossCondBlock(dim=self.dim, n_heads=self.n_heads, dropout=self.dropout, causal=False),
             }) for _ in range(self.n_blocks)])
         
@@ -422,21 +418,17 @@ class TinyWMDecoder(nn.Module):
         b,t,dim = pred_latent.shape
         latent_token = self.latent_proj(pred_latent).unsqueeze(2) # (b t 1 dim)
         latent_token = rearrange(latent_token, "b t 1 dim -> (b t) 1 dim", b=b, t=t, dim=dim) # (bt 1 dim)
-        kv = [latent_token]
+        kv = latent_token
 
         if patches.size(1) != self.n_patches:
             raise ValueError(f"Expected {self.n_patches} patch tokens, got {patches.size(1)}")
-        kv.append(self.patch_proj(patches))
-        
+
+        q = self.patch_proj(patches)
         action_cond = self.action_proj(action_emb)
         action_cond = rearrange(action_cond, "b t dim -> (b t) 1 dim", b=b, t=t, dim=dim) # (bt 1 dim)
         cond = action_cond + latent_token
 
-        kv = torch.cat(kv, dim=1)
-        q = self.queries.expand(b*t, -1, -1) + self.query_pos
-
         for block in self.blocks:
-            q = block["res_self_attn"](q)
             q = block["adaln_cross_attn"](q, kv, kv, cond)
 
         feature_map = self.token_proj(q).transpose(1, 2).reshape(
