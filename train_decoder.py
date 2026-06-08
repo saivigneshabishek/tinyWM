@@ -4,6 +4,8 @@ from tqdm import tqdm
 import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
+from torchvision.utils import make_grid
+import wandb
 from dataset import TinyWMDataset
 from model import TinyWorldModel, TinyWMDecoder
 
@@ -16,6 +18,17 @@ def prepare_frames(frames, device):
     if frames.dtype == torch.uint8:
         return frames.float().div_(255.0) # ops on device
     return frames.float()
+
+def make_wandb_image(pred_frames, target_frames, n_images=5):
+    n_images = min(n_images, pred_frames.shape[0], target_frames.shape[0])
+    pred_last = pred_frames[:n_images, -1].detach().float().cpu().clamp(0, 1)
+    target_last = target_frames[:n_images, -1].detach().float().cpu().clamp(0, 1)
+    comparisons = []
+    for idx in range(n_images):
+        comparisons.extend([target_last[idx], pred_last[idx]])
+    grid_chw = make_grid(comparisons, nrow=2)
+    grid_hwc = (grid_chw.clamp(0, 1) * 255).round().to(torch.uint8).permute(1, 2, 0).numpy()
+    return wandb.Image(grid_hwc, caption="Each row: target | prediction")
 
 def get_dataloader(cfg, train=True):
     data_cfg = cfg["dataset"]
@@ -129,7 +142,6 @@ def main():
     # init wandb
     wandb_run = None
     if cfg["wandb"]["enabled"]:
-        import wandb
         wandb_run = wandb.init(
             project=cfg["wandb"]["project"],
             entity=cfg["wandb"]["entity"],
@@ -226,12 +238,14 @@ def main():
                     "lr": optimizer.param_groups[0]["lr"],
                 }
                 if wandb_run is not None:
+                    log[f"train/E{epoch}_{global_step}.png"] = make_wandb_image(pred_frames, target_frames, n_images=2)
                     wandb_run.log(log, step=global_step)
 
         if (epoch % cfg["train"]["val_interval"] == 0) or epoch==cfg["train"]["epochs"]:
             model.eval()
             total_val_loss = 0
             total_val_rollout_loss = 0
+            val_image = None
             with torch.no_grad():
                 for frames, actions in tqdm(val_loader):
                     frames = prepare_frames(frames, device)
@@ -249,6 +263,8 @@ def main():
                         pred_frames = model(pred_state_emb, vis_patches, act_emb)
                         l1_loss = L1(pred_frames, target_frames)
                         total_val_loss += float(l1_loss.detach().cpu())
+                        if val_image is None and wandb_run is not None:
+                            val_image = make_wandb_image(pred_frames, target_frames, n_images=5)
                         # k step rollout
                         if use_rollout:
                             rollout_weight = cfg["loss"]["rollout"]["weight"]
@@ -287,6 +303,8 @@ def main():
                     "epoch": epoch,
                     "step": global_step,
                 }
+                if val_image is not None:
+                    val_log[f"val/E{epoch}_{global_step}.png"] = val_image
                 wandb_run.log(val_log, step=global_step)
 
             if total_val_loss < best_val_loss:
