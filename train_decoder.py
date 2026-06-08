@@ -193,8 +193,17 @@ def main():
                         with torch.no_grad():
                             rollout_state_emb, rollout_act_emb, rollout_vis_patches = world_model.encode(rollout_frames, input_actions[:, :idx], return_patches=True)
                             rollout_pred_state_emb = world_model.predict(rollout_state_emb, rollout_act_emb)
-                        rollout_pred_frame = model(rollout_pred_state_emb, rollout_vis_patches, rollout_act_emb)
-                        pred_next = rollout_pred_frame[:, -1:]
+                        rollout_vis_patches = rollout_vis_patches.reshape(
+                                    input_frames.shape[0],
+                                    idx,
+                                    rollout_vis_patches.shape[1],
+                                    rollout_vis_patches.shape[2],
+                                )
+                        pred_next = model(
+                                    rollout_pred_state_emb[:, -1:],
+                                    rollout_vis_patches[:, -1],
+                                    rollout_act_emb[:, -1:],
+                                )
                         history.append(pred_next)
                         rollout_preds.append(pred_next)
                     rollout_preds = torch.cat(rollout_preds, dim=1)
@@ -251,8 +260,17 @@ def main():
                                 with torch.no_grad():
                                     rollout_state_emb, rollout_act_emb, rollout_vis_patches = world_model.encode(rollout_frames, input_actions[:, :idx], return_patches=True)
                                     rollout_pred_state_emb = world_model.predict(rollout_state_emb, rollout_act_emb)
-                                rollout_pred_frame = model(rollout_pred_state_emb, rollout_vis_patches, rollout_act_emb)
-                                pred_next = rollout_pred_frame[:, -1:]
+                                rollout_vis_patches = rollout_vis_patches.reshape(
+                                    input_frames.shape[0],
+                                    idx,
+                                    rollout_vis_patches.shape[1],
+                                    rollout_vis_patches.shape[2],
+                                )
+                                pred_next = model(
+                                    rollout_pred_state_emb[:, -1:],
+                                    rollout_vis_patches[:, -1],
+                                    rollout_act_emb[:, -1:],
+                                )
                                 history.append(pred_next)
                                 rollout_preds.append(pred_next)
                             rollout_preds = torch.cat(rollout_preds, dim=1)
