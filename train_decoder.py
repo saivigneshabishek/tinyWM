@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 import wandb
+import lpips
 from dataset import TinyWMDataset
 from model import TinyWorldModel, TinyWMDecoder
 
@@ -135,6 +136,10 @@ def main():
                                 weight_decay=cfg["optimizer"]["weight_decay"])
     
     L1 = torch.nn.L1Loss()
+    LPIPS = lpips.LPIPS(net="vgg").to(device).eval()
+    lpips_weight = 0.1
+    for p in LPIPS.parameters():
+        p.requires_grad_(False)
     use_rollout = cfg["loss"]["rollout"]["use"]
     
     print(f"Using config: {args.config}")
@@ -192,7 +197,9 @@ def main():
                 pred_frames = model(pred_state_emb, vis_patches, act_emb)
 
                 l1_loss = L1(pred_frames, target_frames)
-                loss = l1_loss
+                # lpips expects inputs to be BCHW and in [0,1] range
+                lpips_loss = LPIPS((pred_frames.flatten(0, 1)*2 - 1), (target_frames.flatten(0, 1)*2 - 1)).mean()
+                loss = l1_loss + lpips_weight * lpips_loss
 
                 # k step rollout
                 if use_rollout:
@@ -232,6 +239,7 @@ def main():
                 log = {
                     "train/loss": float(loss.detach().cpu()),
                     "train/l1_loss": float(l1_loss.detach().cpu()),
+                    "train/lpips_loss": float(lpips_loss.detach().cpu()),
                     "train/rollout": float(rollout_loss.detach().cpu()) if use_rollout else 0,
                     "epoch": epoch,
                     "step": global_step,
