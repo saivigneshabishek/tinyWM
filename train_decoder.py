@@ -136,7 +136,7 @@ def main():
                                 weight_decay=cfg["optimizer"]["weight_decay"])
     
     L1 = torch.nn.L1Loss()
-    LPIPS = lpips.LPIPS(net="vgg").to(device).eval()
+    LPIPS = lpips.LPIPS(net="vgg").to(cfg["device"]).eval()
     lpips_weight = 0.1
     for p in LPIPS.parameters():
         p.requires_grad_(False)
